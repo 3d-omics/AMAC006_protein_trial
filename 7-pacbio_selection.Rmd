@@ -1,0 +1,97 @@
+# PacBio selection
+
+```{r load_data_pacbio}
+load("data/data.Rdata")
+```
+
+## Read fraction
+
+```{r microbial_fraction, warning=FALSE, comments="", message=FALSE}
+microbial_fraction <- read_tsv("data/microbial_fraction.tsv") %>%
+  mutate(sample=str_replace_all(sample,"\\.lib1_1", "")) %>%
+  mutate(read_fraction=str_remove(read_fraction,"%") %>% as.numeric())
+```
+
+## Phylogenetic diversity
+
+```{r phylogenetic_diversity, warning=FALSE, comments="", message=FALSE}
+phylogenetic_diversity <- genome_counts %>% 
+            column_to_rownames(var="genome") %>% 
+            select(where(~!all(. == 0))) %>% 
+            hilldiv(.,q=1,tree=genome_tree) %>% 
+            t() %>% 
+            as.data.frame() %>%
+            rename(phylogenetic=1) %>%
+            rownames_to_column(var="sample")
+```
+
+## TOP10 candidate samples
+
+```{r select_samples, warning=FALSE, comments="", message=FALSE}
+#Select top10
+selection <- left_join(phylogenetic_diversity,microbial_fraction,by=join_by(sample==sample)) %>%
+    arrange(-phylogenetic) %>%
+    unique() %>% 
+    select(sample) %>%
+    slice(1:20) %>%
+    pull()
+
+#Print statistics
+left_join(phylogenetic_diversity,microbial_fraction,by=join_by(sample==sample)) %>%
+    left_join(sample_metadata,by="sample") %>% 
+    arrange(-phylogenetic) %>%
+    unique() %>% 
+    slice(1:20) %>%
+    select(sample, phylogenetic, read_fraction, treatment, trial) %>%
+    mutate(number_of_genomes=genome_counts_filt %>%
+               select(all_of(c("genome",selection))) %>%
+               summarise(across(starts_with("D"), ~ sum(. != 0))) %>% t()) %>%
+    rename(phylogenetic_diversity=phylogenetic,microbial_fraction=read_fraction) %>%
+    tt()
+```
+
+All the samples with top phylogenetic diversity metrics have similar microbial fraction.
+
+```{r genomecounts_faeces, warning=FALSE, comments="", message=FALSE, fig.height=8, fig.width=10, fig.fullwidth=TRUE}
+vertical_tree <- force.ultrametric(genome_tree,method="extend") %>%
+        ggtree(., size = 0.3)
+
+#Add phylum colors
+phylum_colors <- read_tsv("https://raw.githubusercontent.com/earthhologenome/EHI_taxonomy_colour/main/ehi_phylum_colors.tsv") %>%
+  right_join(genome_metadata, by=join_by(phylum == phylum)) %>%
+    arrange(match(genome, genome_tree$tip.label)) %>%
+    mutate(phylum = factor(phylum, levels = unique(phylum))) %>%
+    column_to_rownames(var = "genome") %>%
+    select(phylum)
+
+
+colors_alphabetic <- read_tsv("https://raw.githubusercontent.com/earthhologenome/EHI_taxonomy_colour/main/ehi_phylum_colors.tsv") %>%
+  right_join(genome_metadata, by=join_by(phylum == phylum)) %>%
+  arrange(match(genome, genome_tree$tip.label)) %>%
+  select(phylum, colors) %>%
+    unique() %>%
+    arrange(phylum) %>%
+    select(colors) %>%
+    pull()
+
+vertical_tree <- gheatmap(vertical_tree, phylum_colors, offset=-0.6, width=0.1, colnames=FALSE) +
+    scale_fill_manual(values=colors_alphabetic) +
+    new_scale_fill()
+
+#Add genome counts of d0
+genome_counts_selection <- genome_counts_filt %>%
+          select(all_of(c("genome",selection))) %>% 
+          column_to_rownames(var="genome") %>% tss()
+
+vertical_tree <- gheatmap(vertical_tree, log10(genome_counts_selection), offset=-0.4, width=0.3, colnames=TRUE, colnames_angle=90, font.size=3, colnames_position="top", colnames_offset_y = 15) +
+    vexpand(.08) +
+    coord_cartesian(clip = "off") +
+    scale_fill_gradient(low = "lightblue", high = "#315b7d", na.value="#f4f4f4") +
+    new_scale_fill()
+
+vertical_tree +
+  theme(legend.position='none')
+```
+
+Top 10 diversity samples are sorted from left to right.
+
